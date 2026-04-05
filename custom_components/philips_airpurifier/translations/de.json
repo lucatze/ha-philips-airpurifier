@@ -25,11 +25,14 @@
   "options": {
     "step": {
       "init": {
-        "title": "Philips AirPurifier Optionen",
-        "description": "Wähle wie Zustandsänderungen vom Gerät nach Home Assistant fließen. 'Push' gibt jedes CoAP-Event sofort weiter. 'Push gedrosselt' lässt den Observe-Stream im Hintergrund laufen, limitiert aber wie oft HA aktualisiert wird. 'Poll' deaktiviert Observe komplett und ruft den Status in festem Intervall ab — spart Netzwerk-Traffic, dafür erscheinen geräteseitige Änderungen mit bis zu einem Intervall Verzögerung.",
+        "title": "Update-Verhalten",
+        "description": "Wähle wie dein Luftreiniger seinen Zustand an Home Assistant meldet.\n\n**Push** (Standard)\nDas Gerät schickt bei jeder Änderung sofort ein Event. Niedrigste Latenz, höchste Update-Rate in HA.\n\n**Push gedrosselt**\nDas Gerät schickt weiterhin Events im Hintergrund, HA übernimmt den neuesten Stand aber nur einmal pro Intervall. Reduziert HA-State-Churn, Netzwerk-Traffic bleibt identisch.\n\n**Poll**\nObserve wird abgeschaltet. HA fragt stattdessen in festem Intervall aktiv nach dem Zustand. Konstante, vorhersagbare Netzwerk-Last. Änderungen am Gerät selbst (z. B. physischer Knopfdruck) erscheinen mit bis zu einem Intervall Verzögerung.\n\n**Hinweis:** Befehle von HA an das Gerät (Ein/Aus, Modus, Lüfterstufe) sind in allen drei Modi immer sofort — sie laufen über einen separaten Kanal und werden von dieser Einstellung nicht berührt.",
         "data": {
-          "update_mode": "Update-Modus",
-          "update_interval": "Intervall in Sekunden (push_throttled, poll)"
+          "update_mode": "Modus",
+          "update_interval": "Intervall (Sekunden)"
+        },
+        "data_description": {
+          "update_interval": "Wird nur im Modus 'Push gedrosselt' und 'Poll' verwendet. Gültiger Bereich: 1 bis 300 Sekunden."
         }
       }
     }
@@ -37,9 +40,9 @@
   "selector": {
     "update_mode": {
       "options": {
-        "push": "Push — sofort, jedes Gerät-Event",
-        "push_throttled": "Push gedrosselt — Observe im Hintergrund, HA-Update alle N Sekunden",
-        "poll": "Poll — alle N Sekunden abrufen, spart Netzwerk"
+        "push": "Push — Echtzeit, jedes Event",
+        "push_throttled": "Push gedrosselt — HA-Update alle N Sekunden",
+        "poll": "Poll — Gerät alle N Sekunden abfragen"
       }
     }
   },

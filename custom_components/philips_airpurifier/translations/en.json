@@ -35,11 +35,14 @@
   "options": {
     "step": {
       "init": {
-        "title": "Philips AirPurifier options",
-        "description": "Choose how state updates flow from the device into Home Assistant. 'Push' delivers every CoAP event immediately. 'Push throttled' keeps the observe stream running but limits how often HA is updated. 'Poll' disables observe entirely and fetches status on a fixed interval, which reduces network traffic at the cost of up to one interval of delay for device-originated state changes.",
+        "title": "Update behaviour",
+        "description": "Choose how your air purifier reports its state to Home Assistant.\n\n**Push** (default)\nThe device fires an event on every change. Lowest latency, highest update rate in HA.\n\n**Push throttled**\nThe device keeps sending events in the background, but HA picks up the latest state only once per interval. Reduces HA state-churn; network traffic is unchanged.\n\n**Poll**\nObserve is disabled; HA actively fetches the state at a fixed interval. Constant, predictable network load. Changes made at the device itself (e.g. pressing a physical button) appear with up to one interval of delay.\n\n**Note:** Commands from HA to the device (power, mode, fan speed) are always instant in all three modes — they travel over a separate channel and are not affected by this setting.",
         "data": {
-          "update_mode": "Update mode",
-          "update_interval": "Interval in seconds (push_throttled, poll)"
+          "update_mode": "Mode",
+          "update_interval": "Interval (seconds)"
+        },
+        "data_description": {
+          "update_interval": "Only used in 'Push throttled' and 'Poll' modes. Valid range: 1 to 300 seconds."
         }
       }
     }
@@ -47,9 +50,9 @@
   "selector": {
     "update_mode": {
       "options": {
-        "push": "Push — instant, every device event",
-        "push_throttled": "Push throttled — observe in background, emit every N seconds",
-        "poll": "Poll — fetch every N seconds, saves network traffic"
+        "push": "Push — real-time, every event",
+        "push_throttled": "Push throttled — emit every N seconds",
+        "poll": "Poll — fetch every N seconds"
       }
     }
   },

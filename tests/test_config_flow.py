@@ -767,15 +767,17 @@ async def test_user_flow_model_family_supported_branch(hass: HomeAssistant) -> N
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
-async def test_options_flow_shows_form_and_saves(hass: HomeAssistant) -> None:
+async def test_options_flow_shows_form_and_saves_poll_mode(
+    hass: HomeAssistant,
+) -> None:
     """Options flow renders the form and persists the user's selection."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        title="Throttle Test",
+        title="Options Test",
         data={
             CONF_HOST: TEST_HOST,
             CONF_MODEL: "AC0650",
-            CONF_NAME: "Throttle Test",
+            CONF_NAME: "Options Test",
             CONF_DEVICE_ID: TEST_DEVICE_ID,
             CONF_STATUS: MOCK_STATUS_GEN1,
         },
@@ -789,34 +791,58 @@ async def test_options_flow_shows_form_and_saves(hass: HomeAssistant) -> None:
 
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input={"throttle_enabled": True, "throttle_interval": 20},
+        user_input={"update_mode": "poll", "update_interval": 20},
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {"throttle_enabled": True, "throttle_interval": 20}
+    assert entry.options == {"update_mode": "poll", "update_interval": 20}
+
+
+async def test_options_flow_saves_push_throttled_mode(hass: HomeAssistant) -> None:
+    """Options flow accepts the push_throttled mode selection."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Options Test",
+        data={
+            CONF_HOST: TEST_HOST,
+            CONF_MODEL: "AC0650",
+            CONF_NAME: "Options Test",
+            CONF_DEVICE_ID: TEST_DEVICE_ID,
+            CONF_STATUS: MOCK_STATUS_GEN1,
+        },
+        unique_id=TEST_DEVICE_ID,
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={"update_mode": "push_throttled", "update_interval": 5},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {"update_mode": "push_throttled", "update_interval": 5}
 
 
 async def test_options_flow_defaults_from_existing_options(hass: HomeAssistant) -> None:
     """Options flow pre-fills defaults from existing entry options."""
     entry = MockConfigEntry(
         domain=DOMAIN,
-        title="Throttle Test",
+        title="Options Test",
         data={
             CONF_HOST: TEST_HOST,
             CONF_MODEL: "AC0650",
-            CONF_NAME: "Throttle Test",
+            CONF_NAME: "Options Test",
             CONF_DEVICE_ID: TEST_DEVICE_ID,
             CONF_STATUS: MOCK_STATUS_GEN1,
         },
-        options={"throttle_enabled": True, "throttle_interval": 42},
+        options={"update_mode": "poll", "update_interval": 42},
         unique_id=TEST_DEVICE_ID,
     )
     entry.add_to_hass(hass)
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
     assert result["type"] is FlowResultType.FORM
-    # Submit unchanged — the persisted options should match the pre-fill.
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        user_input={"throttle_enabled": True, "throttle_interval": 42},
+        user_input={"update_mode": "poll", "update_interval": 42},
     )
-    assert entry.options == {"throttle_enabled": True, "throttle_interval": 42}
+    assert entry.options == {"update_mode": "poll", "update_interval": 42}

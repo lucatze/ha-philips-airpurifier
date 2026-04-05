@@ -603,12 +603,12 @@ async def test_do_reconnect_success_updates_data_and_timeout(hass: HomeAssistant
     start_observing.assert_called_once()
 
 
-async def test_emit_observed_status_pushes_immediately_when_throttle_off(
+async def test_emit_observed_status_pushes_immediately_in_push_mode(
     hass: HomeAssistant,
 ) -> None:
-    """With throttle disabled the coordinator forwards every push to HA."""
+    """In push mode the coordinator forwards every observe event to HA."""
     coordinator = _make_coordinator(hass)
-    assert coordinator._throttle_enabled is False
+    assert coordinator._update_mode == "push"
 
     with patch.object(coordinator, "async_set_updated_data") as push:
         coordinator._emit_observed_status({"pwr": "1"})
@@ -618,12 +618,12 @@ async def test_emit_observed_status_pushes_immediately_when_throttle_off(
     assert coordinator._latest_status == {"pwr": "0"}
 
 
-async def test_emit_observed_status_caches_only_when_throttle_on(
+async def test_emit_observed_status_caches_only_in_push_throttled_mode(
     hass: HomeAssistant,
 ) -> None:
-    """With throttle enabled the observe loop does not push directly."""
+    """In push_throttled mode the observe loop only caches, does not emit."""
     coordinator = _make_coordinator(hass)
-    coordinator._throttle_enabled = True
+    coordinator._update_mode = "push_throttled"
 
     with patch.object(coordinator, "async_set_updated_data") as push:
         coordinator._emit_observed_status({"pwr": "1"})
@@ -636,7 +636,7 @@ async def test_emit_observed_status_caches_only_when_throttle_on(
 async def test_async_throttle_loop_emits_cached_status(hass: HomeAssistant) -> None:
     """Throttle loop publishes the cached latest status once per interval."""
     coordinator = _make_coordinator(hass)
-    coordinator._throttle_interval = 5
+    coordinator._update_interval = 5
     coordinator._latest_status = {"pwr": "1"}
 
     with (
@@ -657,7 +657,7 @@ async def test_async_throttle_loop_skips_emit_when_no_cached_status(
 ) -> None:
     """Throttle loop does nothing while no cached status is pending."""
     coordinator = _make_coordinator(hass)
-    coordinator._throttle_interval = 5
+    coordinator._update_interval = 5
     coordinator._latest_status = None
 
     with (
@@ -673,54 +673,83 @@ async def test_async_throttle_loop_skips_emit_when_no_cached_status(
     push.assert_not_called()
 
 
-async def test_start_observing_starts_throttle_task_when_enabled(
+async def test_start_observing_push_mode_starts_observe_and_watchdog_only(
     hass: HomeAssistant,
 ) -> None:
-    """_start_observing spawns the throttle task only if throttle is enabled."""
+    """Push mode spawns observe + watchdog, no throttle, no poll."""
     coordinator = _make_coordinator(hass)
-    coordinator._throttle_enabled = True
+    coordinator._update_mode = "push"
 
-    created: list[str] = []
+    names: list[str] = []
 
     def _fake_create_task(coro, name=None, **_kwargs):
-        created.append(name or "")
+        names.append(name or "")
         coro.close()
         return MagicMock()
 
     with patch.object(hass, "async_create_task", side_effect=_fake_create_task):
         coordinator._start_observing()
 
-    assert any("throttle" in n for n in created)
+    assert any("observe" in n for n in names)
+    assert any("watchdog" in n for n in names)
+    assert not any("throttle" in n for n in names)
+    assert not any("poll" in n for n in names)
 
 
-async def test_start_observing_skips_throttle_task_when_disabled(
+async def test_start_observing_push_throttled_mode_also_spawns_throttle(
     hass: HomeAssistant,
 ) -> None:
-    """_start_observing does not spawn the throttle task when throttle is off."""
+    """Push_throttled mode spawns observe + watchdog + throttle."""
     coordinator = _make_coordinator(hass)
-    coordinator._throttle_enabled = False
+    coordinator._update_mode = "push_throttled"
 
-    created: list[str] = []
+    names: list[str] = []
 
     def _fake_create_task(coro, name=None, **_kwargs):
-        created.append(name or "")
+        names.append(name or "")
         coro.close()
         return MagicMock()
 
     with patch.object(hass, "async_create_task", side_effect=_fake_create_task):
         coordinator._start_observing()
 
-    assert not any("throttle" in n for n in created)
-    assert coordinator._throttle_task is None
+    assert any("observe" in n for n in names)
+    assert any("watchdog" in n for n in names)
+    assert any("throttle" in n for n in names)
+    assert not any("poll" in n for n in names)
 
 
-async def test_start_observing_cancels_previous_throttle_task(
+async def test_start_observing_poll_mode_spawns_only_poll_task(
     hass: HomeAssistant,
 ) -> None:
-    """_start_observing cancels an already-running throttle task before replacing it."""
+    """Poll mode disables observe/watchdog and spawns the poll loop."""
     coordinator = _make_coordinator(hass)
-    coordinator._throttle_enabled = True
+    coordinator._update_mode = "poll"
+
+    names: list[str] = []
+
+    def _fake_create_task(coro, name=None, **_kwargs):
+        names.append(name or "")
+        coro.close()
+        return MagicMock()
+
+    with patch.object(hass, "async_create_task", side_effect=_fake_create_task):
+        coordinator._start_observing()
+
+    assert names == [f"philips_airpurifier_poll_{TEST_HOST}"]
+
+
+async def test_start_observing_cancels_stale_tasks_from_any_mode(
+    hass: HomeAssistant,
+) -> None:
+    """_start_observing cancels all leftover update tasks before spawning new ones."""
+    coordinator = _make_coordinator(hass)
+    coordinator._update_mode = "poll"
+    old_observe = MagicMock()
+    old_watchdog = MagicMock()
     old_throttle = MagicMock()
+    coordinator._observe_task = old_observe
+    coordinator._watchdog_task = old_watchdog
     coordinator._throttle_task = old_throttle
 
     def _fake_create_task(coro, *_args, **_kwargs):
@@ -730,20 +759,201 @@ async def test_start_observing_cancels_previous_throttle_task(
     with patch.object(hass, "async_create_task", side_effect=_fake_create_task):
         coordinator._start_observing()
 
+    old_observe.cancel.assert_called_once()
+    old_watchdog.cancel.assert_called_once()
     old_throttle.cancel.assert_called_once()
 
 
-async def test_async_shutdown_cancels_throttle_task(hass: HomeAssistant) -> None:
-    """async_shutdown cancels the throttle task if one is running."""
+async def test_async_shutdown_cancels_throttle_and_poll_tasks(
+    hass: HomeAssistant,
+) -> None:
+    """async_shutdown cancels throttle and poll tasks if present."""
     coordinator = _make_coordinator(hass)
     throttle_task = MagicMock()
+    poll_task = MagicMock()
     coordinator._throttle_task = throttle_task
+    coordinator._poll_task = poll_task
     coordinator.client = AsyncMock()
 
     await coordinator.async_shutdown()
 
     throttle_task.cancel.assert_called_once()
+    poll_task.cancel.assert_called_once()
     assert coordinator._throttle_task is None
+    assert coordinator._poll_task is None
+
+
+async def test_async_poll_loop_emits_status_and_sleeps(hass: HomeAssistant) -> None:
+    """One successful poll iteration emits status and then sleeps for the interval."""
+    client = AsyncMock()
+    client.get_status = AsyncMock(return_value=({"pwr": "1"}, 45))
+    coordinator = _make_coordinator(hass, client=client)
+    coordinator._update_interval = 7
+
+    fake_loop = MagicMock()
+    fake_loop.time.return_value = 123.0
+
+    with (
+        patch(
+            "custom_components.philips_airpurifier.coordinator.asyncio.sleep",
+            side_effect=asyncio.CancelledError,
+        ) as sleep_mock,
+        patch(
+            "custom_components.philips_airpurifier.coordinator.asyncio.get_event_loop",
+            return_value=fake_loop,
+        ),
+        patch.object(coordinator, "async_set_updated_data") as push,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await coordinator._async_poll_loop()
+
+    push.assert_called_once_with({"pwr": "1"})
+    assert coordinator._timeout == 45
+    assert coordinator._last_update == 123.0
+    sleep_mock.assert_awaited_with(7)
+
+
+async def test_async_poll_loop_marks_unavailable_on_failure(
+    hass: HomeAssistant,
+) -> None:
+    """Poll-loop failures mark the device unavailable and retry on next tick."""
+    client = AsyncMock()
+    client.get_status = AsyncMock(side_effect=RuntimeError("boom"))
+    coordinator = _make_coordinator(hass, client=client)
+    coordinator._update_interval = 5
+
+    sleep_calls = 0
+
+    async def fake_sleep(_delay):
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls >= 1:
+            raise asyncio.CancelledError
+
+    with (
+        patch(
+            "custom_components.philips_airpurifier.coordinator.asyncio.sleep",
+            side_effect=fake_sleep,
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await coordinator._async_poll_loop()
+
+    assert coordinator._device_available is False
+
+
+async def test_async_poll_loop_recreates_client_after_repeated_failures(
+    hass: HomeAssistant,
+) -> None:
+    """After N consecutive failures the poll loop tears down and rebuilds the client."""
+    old_client = AsyncMock()
+    old_client.get_status = AsyncMock(side_effect=RuntimeError("network gone"))
+    old_client.shutdown = AsyncMock()
+    coordinator = _make_coordinator(hass, client=old_client)
+    coordinator._update_interval = 1
+
+    new_client = AsyncMock()
+    new_client.get_status = AsyncMock(side_effect=RuntimeError("still gone"))
+
+    sleep_count = 0
+
+    async def fake_sleep(_delay):
+        nonlocal sleep_count
+        sleep_count += 1
+        # Allow 3 poll iterations (the recreate threshold) and then cancel.
+        if sleep_count >= 3:
+            raise asyncio.CancelledError
+
+    with (
+        patch(
+            "custom_components.philips_airpurifier.coordinator.asyncio.sleep",
+            side_effect=fake_sleep,
+        ),
+        patch(
+            "custom_components.philips_airpurifier.coordinator.CoAPClient.create",
+            new=AsyncMock(return_value=new_client),
+        ) as create_mock,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await coordinator._async_poll_loop()
+
+    create_mock.assert_awaited()  # rebuild happened
+    assert coordinator.client is new_client
+
+
+async def test_async_poll_loop_client_recreate_failure_logged(
+    hass: HomeAssistant,
+) -> None:
+    """If the client rebuild itself fails the loop keeps going."""
+    old_client = AsyncMock()
+    old_client.get_status = AsyncMock(side_effect=RuntimeError("down"))
+    old_client.shutdown = AsyncMock()
+    coordinator = _make_coordinator(hass, client=old_client)
+    coordinator._update_interval = 1
+
+    sleep_count = 0
+
+    async def fake_sleep(_delay):
+        nonlocal sleep_count
+        sleep_count += 1
+        if sleep_count >= 3:
+            raise asyncio.CancelledError
+
+    with (
+        patch(
+            "custom_components.philips_airpurifier.coordinator.asyncio.sleep",
+            side_effect=fake_sleep,
+        ),
+        patch(
+            "custom_components.philips_airpurifier.coordinator.CoAPClient.create",
+            new=AsyncMock(side_effect=RuntimeError("recreate failed")),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await coordinator._async_poll_loop()
+
+    # Loop was cancelled after its retry; no unhandled exception escaped.
+    assert coordinator._device_available is False
+
+
+async def test_async_poll_loop_cancelled_during_get_status(
+    hass: HomeAssistant,
+) -> None:
+    """CancelledError raised by get_status must propagate out of the poll loop."""
+    client = AsyncMock()
+    client.get_status = AsyncMock(side_effect=asyncio.CancelledError)
+    coordinator = _make_coordinator(hass, client=client)
+    coordinator._update_interval = 1
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator._async_poll_loop()
+
+
+async def test_async_poll_loop_client_recreate_propagates_cancel(
+    hass: HomeAssistant,
+) -> None:
+    """CancelledError during client recreation must propagate out of the poll loop."""
+    old_client = AsyncMock()
+    old_client.get_status = AsyncMock(side_effect=RuntimeError("down"))
+    old_client.shutdown = AsyncMock()
+    coordinator = _make_coordinator(hass, client=old_client)
+    coordinator._update_interval = 1
+
+    async def fake_sleep(_delay):
+        return None
+
+    with (
+        patch(
+            "custom_components.philips_airpurifier.coordinator.asyncio.sleep",
+            side_effect=fake_sleep,
+        ),
+        patch(
+            "custom_components.philips_airpurifier.coordinator.CoAPClient.create",
+            new=AsyncMock(side_effect=asyncio.CancelledError),
+        ),
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await coordinator._async_poll_loop()
 
 
 async def test_async_observe_status_iteration_timeout_triggers_reconnect(

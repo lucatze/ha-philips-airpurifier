@@ -16,10 +16,10 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_MODEL,
     CONF_STATUS,
-    CONF_THROTTLE_ENABLED,
-    CONF_THROTTLE_INTERVAL,
-    DEFAULT_THROTTLE_ENABLED,
-    DEFAULT_THROTTLE_INTERVAL,
+    CONF_UPDATE_INTERVAL,
+    CONF_UPDATE_MODE,
+    DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_UPDATE_MODE,
     DOMAIN,
 )
 from .coordinator import PhilipsAirPurifierCoordinator
@@ -82,16 +82,16 @@ async def async_setup_entry(
         device_id=device_id,
     )
 
-    throttle_enabled = entry.options.get(CONF_THROTTLE_ENABLED, DEFAULT_THROTTLE_ENABLED)
-    throttle_interval = entry.options.get(CONF_THROTTLE_INTERVAL, DEFAULT_THROTTLE_INTERVAL)
+    update_mode = entry.options.get(CONF_UPDATE_MODE, DEFAULT_UPDATE_MODE)
+    update_interval = entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
 
     coordinator = PhilipsAirPurifierCoordinator(
         hass,
         client,
         host,
         device_information,
-        throttle_enabled=throttle_enabled,
-        throttle_interval=throttle_interval,
+        update_mode=update_mode,
+        update_interval=update_interval,
     )
 
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))

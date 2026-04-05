@@ -11,7 +11,14 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client import CoAPClient, async_create_client
-from .const import DEFAULT_THROTTLE_ENABLED, DEFAULT_THROTTLE_INTERVAL, DOMAIN
+from .const import (
+    DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_UPDATE_MODE,
+    DOMAIN,
+    UPDATE_MODE_POLL,
+    UPDATE_MODE_PUSH,
+    UPDATE_MODE_PUSH_THROTTLED,
+)
 from .device_models import DEVICE_MODELS
 from .model import ApiGeneration, DeviceInformation, DeviceModelConfig
 
@@ -32,6 +39,11 @@ RECONNECT_BASE_DELAY = 1.0
 RECONNECT_MAX_DELAY = 60.0
 RECONNECT_BACKOFF_FACTOR = 2.0
 
+# Poll mode: after this many consecutive failed get_status() calls, the
+# coordinator tears down its CoAPClient and builds a fresh one to recover
+# from a corrupted underlying aiocoap context.
+POLL_MAX_FAILURES_BEFORE_RECREATE = 3
+
 
 class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator to manage data from Philips AirPurifier via CoAP push."""
@@ -43,8 +55,8 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         host: str,
         device_info: DeviceInformation,
         *,
-        throttle_enabled: bool = DEFAULT_THROTTLE_ENABLED,
-        throttle_interval: int = DEFAULT_THROTTLE_INTERVAL,
+        update_mode: str = DEFAULT_UPDATE_MODE,
+        update_interval: int = DEFAULT_UPDATE_INTERVAL,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
@@ -63,14 +75,16 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_update: float = 0.0
         self._device_available = True
 
-        # Optional throttling of observe-push updates. When enabled, the
-        # observe loop caches the most recent status and a separate task
-        # emits it to Home Assistant at most once per interval. When
-        # disabled, every push is forwarded immediately (default).
-        self._throttle_enabled = throttle_enabled
-        self._throttle_interval = throttle_interval
+        # Update-mode configuration. ``update_mode`` selects between the
+        # three strategies documented in const.py: "push", "push_throttled"
+        # and "poll". ``update_interval`` is the cadence (seconds) used by
+        # "push_throttled" (HA emit rate) and "poll" (network fetch rate).
+        # In "push" mode the interval is ignored.
+        self._update_mode = update_mode
+        self._update_interval = update_interval
         self._latest_status: dict[str, Any] | None = None
         self._throttle_task: asyncio.Task[None] | None = None
+        self._poll_task: asyncio.Task[None] | None = None
 
     def _mark_unavailable(self, reason: str) -> None:
         """Mark the device unavailable and log transition once."""
@@ -119,22 +133,80 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.client.set_control_values(data=values)
 
     def _emit_observed_status(self, status: dict[str, Any]) -> None:
-        """Forward an observed status to HA, honouring the throttle setting.
+        """Forward an observed status to HA, honouring the update mode.
 
-        When throttling is disabled the status is pushed to HA immediately
-        (original behaviour). When enabled, the status is cached and the
-        running throttle task will publish it at most once per interval.
+        In "push" mode the status is published to HA immediately. In
+        "push_throttled" mode the status is cached and the throttle task
+        publishes it on a fixed interval. This method is never called in
+        "poll" mode because the observe loop is not running.
         """
         self._latest_status = status
-        if not self._throttle_enabled:
+        if self._update_mode == UPDATE_MODE_PUSH:
             self.async_set_updated_data(status)
 
     async def _async_throttle_loop(self) -> None:
         """Publish the latest cached status on a fixed interval."""
         while True:
-            await asyncio.sleep(self._throttle_interval)
+            await asyncio.sleep(self._update_interval)
             if self._latest_status is not None:
                 self.async_set_updated_data(self._latest_status)
+
+    async def _async_poll_loop(self) -> None:
+        """Fetch status on a fixed interval instead of observing.
+
+        This is the "poll" update mode. It mirrors the architecture of a
+        subprocess-per-poll bridge: each iteration is an independent
+        ``get_status()`` request, so stuck-state issues typical of
+        long-running observe streams cannot accumulate. After several
+        consecutive failures the underlying CoAPClient is torn down and
+        rebuilt to recover from corrupted aiocoap state.
+        """
+        consecutive_failures = 0
+        while True:
+            try:
+                status, timeout = await asyncio.wait_for(
+                    self.client.get_status(), timeout=STATUS_FETCH_TIMEOUT
+                )
+                self._timeout = timeout
+                self._last_update = asyncio.get_event_loop().time()
+                self._mark_available()
+                self._latest_status = status
+                self.async_set_updated_data(status)
+                consecutive_failures = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                consecutive_failures += 1
+                self._mark_unavailable("poll failed")
+                _LOGGER.warning(
+                    "Poll to %s failed (%d/%d): %s",
+                    self.host,
+                    consecutive_failures,
+                    POLL_MAX_FAILURES_BEFORE_RECREATE,
+                    err,
+                )
+                if consecutive_failures >= POLL_MAX_FAILURES_BEFORE_RECREATE:
+                    _LOGGER.warning(
+                        "Recreating CoAPClient for %s after %d failures",
+                        self.host,
+                        consecutive_failures,
+                    )
+                    with contextlib.suppress(Exception):
+                        await self.client.shutdown()
+                    try:
+                        self.client = await async_create_client(
+                            self.host, create_client=CoAPClient.create
+                        )
+                        consecutive_failures = 0
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as recreate_err:
+                        _LOGGER.warning(
+                            "CoAPClient recreation for %s failed: %s",
+                            self.host,
+                            recreate_err,
+                        )
+            await asyncio.sleep(self._update_interval)
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the device (used for initial refresh and fallback)."""
@@ -155,28 +227,37 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(msg) from err
 
     def _start_observing(self) -> None:
-        """Start observing device status via CoAP push."""
-        if self._observe_task is not None:
-            self._observe_task.cancel()
+        """Start the update mechanism appropriate for the current mode.
 
+        Historically named _start_observing because push/observe was the
+        only mode. It now also spins up the poll loop in "poll" mode.
+        """
+        # Cancel any existing update tasks so reconfigures on options
+        # change replace cleanly.
+        for task_attr in ("_observe_task", "_watchdog_task", "_throttle_task", "_poll_task"):
+            task = getattr(self, task_attr)
+            if task is not None:
+                task.cancel()
+                setattr(self, task_attr, None)
+
+        if self._update_mode == UPDATE_MODE_POLL:
+            self._poll_task = self.hass.async_create_task(
+                self._async_poll_loop(),
+                f"philips_airpurifier_poll_{self.host}",
+            )
+            return
+
+        # push or push_throttled → observe + watchdog
         self._observe_task = self.hass.async_create_task(
             self._async_observe_status(),
             f"philips_airpurifier_observe_{self.host}",
         )
-
-        if self._watchdog_task is not None:
-            self._watchdog_task.cancel()
-
         self._watchdog_task = self.hass.async_create_task(
             self._async_watchdog(),
             f"philips_airpurifier_watchdog_{self.host}",
         )
 
-        if self._throttle_task is not None:
-            self._throttle_task.cancel()
-            self._throttle_task = None
-
-        if self._throttle_enabled:
+        if self._update_mode == UPDATE_MODE_PUSH_THROTTLED:
             self._throttle_task = self.hass.async_create_task(
                 self._async_throttle_loop(),
                 f"philips_airpurifier_throttle_{self.host}",
@@ -337,6 +418,10 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._throttle_task is not None:
             self._throttle_task.cancel()
             self._throttle_task = None
+
+        if self._poll_task is not None:
+            self._poll_task.cancel()
+            self._poll_task = None
 
         if self.client is not None:
             with contextlib.suppress(Exception):

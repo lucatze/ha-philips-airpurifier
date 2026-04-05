@@ -48,18 +48,35 @@ CONF_MODEL = "model"
 CONF_DEVICE_ID = "device_id"
 CONF_STATUS = "status"
 
-# Options: throttle CoAP-push updates to at most one emit per interval.
-# When disabled (default), every push event from the device is forwarded
-# immediately to Home Assistant. When enabled, the observe stream still
-# runs but the coordinator emits the most recent status at a fixed
-# interval, reducing state-churn for users who find the raw push rate
-# too high.
-CONF_THROTTLE_ENABLED = "throttle_enabled"
-CONF_THROTTLE_INTERVAL = "throttle_interval"
-DEFAULT_THROTTLE_ENABLED = False
-DEFAULT_THROTTLE_INTERVAL = 10
-MIN_THROTTLE_INTERVAL = 1
-MAX_THROTTLE_INTERVAL = 300
+# Options: how the coordinator receives device status.
+#
+# - UPDATE_MODE_PUSH (default): CoAP observe stream, every device push is
+#   forwarded to Home Assistant immediately. Lowest latency, highest HA
+#   state-churn rate. Network traffic = however chatty the device is.
+#
+# - UPDATE_MODE_PUSH_THROTTLED: observe stream still runs in the background
+#   (so no state transitions are missed) but the coordinator emits the
+#   latest cached status to HA at most once per ``update_interval``.
+#   Reduces HA churn without touching network traffic.
+#
+# - UPDATE_MODE_POLL: observe stream is disabled; the coordinator fetches
+#   status via ``get_status()`` every ``update_interval`` seconds. Reduces
+#   network traffic to a predictable fixed rate. Device-originated state
+#   changes (e.g. someone pressing a button on the purifier) are visible
+#   in HA only after the next poll. HA-initiated commands (toggles,
+#   sliders) are unaffected — those go through ``set_control_values``
+#   which is a separate code path and always acts immediately.
+UPDATE_MODE_PUSH = "push"
+UPDATE_MODE_PUSH_THROTTLED = "push_throttled"
+UPDATE_MODE_POLL = "poll"
+UPDATE_MODES = (UPDATE_MODE_PUSH, UPDATE_MODE_PUSH_THROTTLED, UPDATE_MODE_POLL)
+
+CONF_UPDATE_MODE = "update_mode"
+CONF_UPDATE_INTERVAL = "update_interval"
+DEFAULT_UPDATE_MODE = UPDATE_MODE_PUSH
+DEFAULT_UPDATE_INTERVAL = 10
+MIN_UPDATE_INTERVAL = 1
+MAX_UPDATE_INTERVAL = 300
 
 SWITCH_ON = "on"
 TEST_ON = "on"

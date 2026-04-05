@@ -117,12 +117,11 @@ async def test_options_update_triggers_reload(
     ):
         hass.config_entries.async_update_entry(
             init_integration,
-            options={"throttle_enabled": True, "throttle_interval": 15},
+            options={"update_mode": "poll", "update_interval": 15},
         )
         await hass.async_block_till_done()
 
-    # Entry must still be loaded after the reload and the new options applied.
     assert init_integration.state is ConfigEntryState.LOADED
     coordinator = init_integration.runtime_data
-    assert coordinator._throttle_enabled is True
-    assert coordinator._throttle_interval == 15
+    assert coordinator._update_mode == "poll"
+    assert coordinator._update_interval == 15

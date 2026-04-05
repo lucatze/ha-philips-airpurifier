@@ -34,11 +34,20 @@
     "step": {
       "init": {
         "title": "Philips AirPurifier options",
-        "description": "Throttle CoAP push updates: when enabled, device pushes are still received in the background but only forwarded to Home Assistant at most once per interval. Disable for immediate push-through (default).",
+        "description": "Choose how state updates flow from the device into Home Assistant. 'Push' delivers every CoAP event immediately. 'Push throttled' keeps the observe stream running but limits how often HA is updated. 'Poll' disables observe entirely and fetches status on a fixed interval, which reduces network traffic at the cost of up to one interval of delay for device-originated state changes.",
         "data": {
-          "throttle_enabled": "Enable push throttle",
-          "throttle_interval": "Interval in seconds"
+          "update_mode": "Update mode",
+          "update_interval": "Interval in seconds (push_throttled, poll)"
         }
+      }
+    }
+  },
+  "selector": {
+    "update_mode": {
+      "options": {
+        "push": "Push — instant, every device event",
+        "push_throttled": "Push throttled — observe in background, emit every N seconds",
+        "poll": "Poll — fetch every N seconds, saves network traffic"
       }
     }
   },

@@ -26,11 +26,20 @@
     "step": {
       "init": {
         "title": "Philips AirPurifier Optionen",
-        "description": "Push-Updates drosseln: wenn aktiviert, werden CoAP-Pushes vom Gerät weiterhin im Hintergrund empfangen, aber nur höchstens einmal pro Intervall an Home Assistant weitergegeben. Deaktiviert = sofortige Weitergabe (Standard).",
+        "description": "Wähle wie Zustandsänderungen vom Gerät nach Home Assistant fließen. 'Push' gibt jedes CoAP-Event sofort weiter. 'Push gedrosselt' lässt den Observe-Stream im Hintergrund laufen, limitiert aber wie oft HA aktualisiert wird. 'Poll' deaktiviert Observe komplett und ruft den Status in festem Intervall ab — spart Netzwerk-Traffic, dafür erscheinen geräteseitige Änderungen mit bis zu einem Intervall Verzögerung.",
         "data": {
-          "throttle_enabled": "Push-Drosselung aktivieren",
-          "throttle_interval": "Intervall in Sekunden"
+          "update_mode": "Update-Modus",
+          "update_interval": "Intervall in Sekunden (push_throttled, poll)"
         }
+      }
+    }
+  },
+  "selector": {
+    "update_mode": {
+      "options": {
+        "push": "Push — sofort, jedes Gerät-Event",
+        "push_throttled": "Push gedrosselt — Observe im Hintergrund, HA-Update alle N Sekunden",
+        "poll": "Poll — alle N Sekunden abrufen, spart Netzwerk"
       }
     }
   },

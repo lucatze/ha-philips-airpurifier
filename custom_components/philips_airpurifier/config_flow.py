@@ -14,6 +14,12 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlowResult, OptionsF
 from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
 from .client import CoAPClient, async_fetch_status
@@ -21,13 +27,16 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_MODEL,
     CONF_STATUS,
-    CONF_THROTTLE_ENABLED,
-    CONF_THROTTLE_INTERVAL,
-    DEFAULT_THROTTLE_ENABLED,
-    DEFAULT_THROTTLE_INTERVAL,
+    CONF_UPDATE_INTERVAL,
+    CONF_UPDATE_MODE,
+    DEFAULT_UPDATE_INTERVAL,
+    DEFAULT_UPDATE_MODE,
     DOMAIN,
-    MAX_THROTTLE_INTERVAL,
-    MIN_THROTTLE_INTERVAL,
+    MAX_UPDATE_INTERVAL,
+    MIN_UPDATE_INTERVAL,
+    UPDATE_MODE_POLL,
+    UPDATE_MODE_PUSH,
+    UPDATE_MODE_PUSH_THROTTLED,
     PhilipsApi,
 )
 from .device_models import DEVICE_MODELS
@@ -347,10 +356,19 @@ class PhilipsAirPurifierConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class PhilipsAirPurifierOptionsFlow(OptionsFlow):
     """Options flow for the Philips AirPurifier integration.
 
-    Currently exposes the optional push-throttle setting: when enabled,
-    CoAP observe pushes are forwarded to Home Assistant at most once per
-    configured interval instead of on every event. Useful for users who
-    find the raw push rate too high.
+    Exposes the update-mode selector:
+
+    - push            — CoAP observe, every device event is forwarded to
+                        Home Assistant immediately (default, lowest
+                        latency, highest churn)
+    - push_throttled  — observe still runs in the background; HA sees the
+                        latest cached state at most once per
+                        ``update_interval`` seconds (reduces HA churn,
+                        network traffic unchanged)
+    - poll            — observe disabled; coordinator fetches status once
+                        per ``update_interval`` seconds (reduces network
+                        traffic, device-originated state changes appear
+                        with up to one interval of delay)
     """
 
     def __init__(self, config_entry: ConfigEntry) -> None:
@@ -368,15 +386,28 @@ class PhilipsAirPurifierOptionsFlow(OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Required(
-                    CONF_THROTTLE_ENABLED,
-                    default=current.get(CONF_THROTTLE_ENABLED, DEFAULT_THROTTLE_ENABLED),
-                ): bool,
+                    CONF_UPDATE_MODE,
+                    default=current.get(CONF_UPDATE_MODE, DEFAULT_UPDATE_MODE),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            SelectOptionDict(value=UPDATE_MODE_PUSH, label="push"),
+                            SelectOptionDict(
+                                value=UPDATE_MODE_PUSH_THROTTLED,
+                                label="push_throttled",
+                            ),
+                            SelectOptionDict(value=UPDATE_MODE_POLL, label="poll"),
+                        ],
+                        mode=SelectSelectorMode.DROPDOWN,
+                        translation_key=CONF_UPDATE_MODE,
+                    )
+                ),
                 vol.Required(
-                    CONF_THROTTLE_INTERVAL,
-                    default=current.get(CONF_THROTTLE_INTERVAL, DEFAULT_THROTTLE_INTERVAL),
+                    CONF_UPDATE_INTERVAL,
+                    default=current.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL),
                 ): vol.All(
                     cv.positive_int,
-                    vol.Range(min=MIN_THROTTLE_INTERVAL, max=MAX_THROTTLE_INTERVAL),
+                    vol.Range(min=MIN_UPDATE_INTERVAL, max=MAX_UPDATE_INTERVAL),
                 ),
             }
         )

@@ -5,7 +5,6 @@ import logging
 import re
 from typing import Any
 
-from philips_airctrl import CoAPClient
 import voluptuous as vol
 
 from homeassistant import config_entries, exceptions
@@ -14,7 +13,7 @@ from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
-from .client import async_fetch_status
+from .client import CoAPClient, async_fetch_status
 from .const import CONF_DEVICE_ID, CONF_MODEL, CONF_STATUS, DOMAIN, PhilipsApi
 from .device_models import DEVICE_MODELS
 from .helpers import extract_model, extract_name

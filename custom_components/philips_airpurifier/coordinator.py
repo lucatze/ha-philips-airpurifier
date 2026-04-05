@@ -7,12 +7,10 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
-from philips_airctrl import CoAPClient
-
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .client import async_create_client
+from .client import CoAPClient, async_create_client
 from .const import DOMAIN
 from .device_models import DEVICE_MODELS
 from .model import ApiGeneration, DeviceInformation, DeviceModelConfig
@@ -22,8 +20,17 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+# Stall detection
 MISSED_PACKAGE_COUNT = 3
 DEFAULT_TIMEOUT = 60
+WATCHDOG_CHECK_INTERVAL = 10.0
+OBSERVE_ITERATION_TIMEOUT = 90.0
+STATUS_FETCH_TIMEOUT = 15.0
+
+# Reconnect backoff
+RECONNECT_BASE_DELAY = 1.0
+RECONNECT_MAX_DELAY = 60.0
+RECONNECT_BACKOFF_FACTOR = 2.0
 
 
 class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -102,10 +109,16 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the device (used for initial refresh and fallback)."""
         try:
-            status, timeout = await self.client.get_status()
+            status, timeout = await asyncio.wait_for(
+                self.client.get_status(), timeout=STATUS_FETCH_TIMEOUT
+            )
             self._timeout = timeout
             self._mark_available()
             return status
+        except TimeoutError as err:
+            self._mark_unavailable("status update timed out")
+            msg = f"Timeout communicating with device at {self.host}"
+            raise UpdateFailed(msg) from err
         except Exception as err:
             self._mark_unavailable("status update failed")
             msg = f"Error communicating with device at {self.host}"
@@ -130,39 +143,67 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     async def _async_observe_status(self) -> None:
-        """Observe device status via CoAP push updates."""
+        """Observe device status via CoAP push updates with per-iteration timeout."""
+        stream = self.client.observe_status()
+        needs_reconnect = False
         try:
-            async for status in self.client.observe_status():
+            while True:
+                try:
+                    status = await asyncio.wait_for(
+                        stream.__anext__(), timeout=OBSERVE_ITERATION_TIMEOUT
+                    )
+                except StopAsyncIteration:
+                    _LOGGER.debug(
+                        "Observation stream completed for %s",
+                        self.host,
+                    )
+                    return
+                except TimeoutError:
+                    self._mark_unavailable("observe iteration timeout")
+                    _LOGGER.warning(
+                        "No push update from %s in %.0fs, triggering reconnect",
+                        self.host,
+                        OBSERVE_ITERATION_TIMEOUT,
+                    )
+                    needs_reconnect = True
+                    break
                 self._last_update = asyncio.get_event_loop().time()
                 self._mark_available()
                 self.async_set_updated_data(status)
         except asyncio.CancelledError:
             raise
-        except Exception:
-            self._mark_unavailable("observation stream ended")
-            _LOGGER.debug(
-                "Observation stream ended for %s, triggering reconnect",
+        except Exception as err:
+            self._mark_unavailable("observation stream error")
+            _LOGGER.warning(
+                "Observation stream error for %s: %s — triggering reconnect",
                 self.host,
+                err,
             )
+            needs_reconnect = True
+
+        if needs_reconnect:
             self.hass.async_create_task(self._async_reconnect())
 
     async def _async_watchdog(self) -> None:
         """Watch for missed updates and trigger reconnect if needed."""
         while True:
-            await asyncio.sleep(self._timeout * MISSED_PACKAGE_COUNT)
-            if self._last_update > 0:
-                elapsed = asyncio.get_event_loop().time() - self._last_update
-                if elapsed > self._timeout * MISSED_PACKAGE_COUNT:
-                    self._mark_unavailable("watchdog timeout")
-                    _LOGGER.warning(
-                        "No updates from %s for %d seconds, reconnecting",
-                        self.host,
-                        int(elapsed),
-                    )
-                    await self._async_reconnect()
+            await asyncio.sleep(WATCHDOG_CHECK_INTERVAL)
+            if self._last_update <= 0:
+                continue
+            elapsed = asyncio.get_event_loop().time() - self._last_update
+            stall_threshold = self._timeout * MISSED_PACKAGE_COUNT
+            if elapsed > stall_threshold:
+                self._mark_unavailable("watchdog timeout")
+                _LOGGER.warning(
+                    "No updates from %s for %.0fs (threshold %.0fs), reconnecting",
+                    self.host,
+                    elapsed,
+                    stall_threshold,
+                )
+                await self._async_reconnect()
 
     async def _async_reconnect(self) -> None:
-        """Reconnect to the device."""
+        """Schedule a reconnect if none is in-flight."""
         if self._reconnect_task is not None and not self._reconnect_task.done():
             return
 
@@ -172,36 +213,61 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
     async def _do_reconnect(self) -> None:
-        """Perform the actual reconnect."""
-        try:
-            with contextlib.suppress(Exception):
-                await self.client.shutdown()
-
-            self.client = await async_create_client(self.host, create_client=CoAPClient.create)
-            _LOGGER.info("Reconnected to %s", self.host)
-
+        """Reconnect with exponential backoff until success or cancellation."""
+        self._last_update = 0.0
+        delay = RECONNECT_BASE_DELAY
+        attempt = 0
+        while True:
+            attempt += 1
             try:
-                status, timeout = await self.client.get_status()
-                self._timeout = timeout
-                self._mark_available()
-                self.async_set_updated_data(status)
-            except Exception:
-                self._mark_unavailable("reconnect status fetch failed")
-                _LOGGER.debug(
-                    "Failed to get status after reconnect to %s",
+                with contextlib.suppress(Exception):
+                    await self.client.shutdown()
+
+                self.client = await async_create_client(
+                    self.host, create_client=CoAPClient.create
+                )
+                _LOGGER.info(
+                    "Reconnected to %s on attempt %d",
                     self.host,
+                    attempt,
                 )
 
-            self._start_observing()
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            _LOGGER.exception("Reconnect to %s failed", self.host)
+                try:
+                    status, timeout = await asyncio.wait_for(
+                        self.client.get_status(), timeout=STATUS_FETCH_TIMEOUT
+                    )
+                    self._timeout = timeout
+                    self._mark_available()
+                    self.async_set_updated_data(status)
+                except Exception as err:
+                    self._mark_unavailable("reconnect status fetch failed")
+                    _LOGGER.warning(
+                        "Failed to get status after reconnect to %s: %s",
+                        self.host,
+                        err,
+                    )
+
+                self._start_observing()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                _LOGGER.warning(
+                    "Reconnect to %s attempt %d failed: %s — retrying in %.1fs",
+                    self.host,
+                    attempt,
+                    err,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * RECONNECT_BACKOFF_FACTOR, RECONNECT_MAX_DELAY)
 
     async def async_first_refresh_and_observe(self) -> None:
         """Perform first refresh and start observing."""
         try:
-            status, timeout = await self.client.get_status()
+            status, timeout = await asyncio.wait_for(
+                self.client.get_status(), timeout=STATUS_FETCH_TIMEOUT
+            )
             self._timeout = timeout
             self._mark_available()
             self.async_set_updated_data(status)

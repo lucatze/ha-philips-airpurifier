@@ -5,15 +5,13 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from philips_airctrl import CoAPClient
-
 from homeassistant.components.repairs import ConfirmRepairFlow, RepairsFlow
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import device_registry as dr, entity_registry as er, issue_registry as ir
 
-from .client import async_fetch_status
+from .client import CoAPClient, async_fetch_status
 from .const import CONF_STATUS, DOMAIN
 
 if TYPE_CHECKING:

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import logging
 
-from philips_airctrl import CoAPClient
-
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_NAME, Platform
 from homeassistant.core import HomeAssistant
@@ -13,7 +11,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.typing import ConfigType
 
-from .client import async_create_client
+from .client import CoAPClient, async_create_client
 from .const import (
     CONF_DEVICE_ID,
     CONF_MODEL,

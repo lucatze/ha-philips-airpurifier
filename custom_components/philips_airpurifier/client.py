@@ -1,25 +1,27 @@
 """Client helpers for Philips Air Purifier CoAP communication.
 
 This module wraps the upstream ``philips_airctrl.CoAPClient`` with a small
-``PatchedCoAPClient`` subclass that restores two stability fixes present in
-the older, battle-tested ``aioairctrl`` library that upstream was forked from.
+``PatchedCoAPClient`` subclass that restores one stability fix from the
+older, battle-tested ``aioairctrl`` library that upstream was forked from.
 
 Scope of the patch (everything else is inherited unchanged):
 
-1. ``_init`` creates the aiocoap ``Context`` with an explicit
-   ``transports=["simple6"]`` selection. The upstream library lets aiocoap
-   pick its default transport, which can vary per host/network and is a
-   known source of flakiness. ``simple6`` is the transport aioairctrl has
-   used reliably across dozens of Philips models for years.
+``observe_status`` cancels the CoAP observation in a ``finally`` block
+when the caller stops iterating. Without this cancellation the device
+keeps an orphaned observation registration alive; when the integration
+later reconnects, the device may silently refuse to push updates to the
+new observer, which manifests as the "hangs after working for a while"
+symptom the upstream README documents. Restoring the
+``observation.cancel()`` call is the single biggest stability fix at
+the CoAP layer.
 
-2. ``observe_status`` cancels the CoAP observation in a ``finally`` block
-   when the caller stops iterating. Without this cancellation the device
-   keeps an orphaned observation registration alive; when the integration
-   later reconnects, the device may silently refuse to push updates to
-   the new observer, which manifests as the "hangs after working for a
-   while" symptom the upstream README documents. Restoring the
-   ``observation.cancel()`` call is the single biggest stability fix at
-   the CoAP layer.
+Note on transports: an earlier version of this wrapper also pinned
+``Context.create_client_context(transports=["simple6"])`` based on
+aioairctrl's behaviour. That broke real-world Home Assistant deployments
+where the ``simple6`` transport could complete the sync handshake but
+could not properly register CoAP observations against the device. The
+transport override was removed; we now use aiocoap's default transport
+selection, same as upstream.
 
 The patched class is re-exported as ``CoAPClient`` so the rest of the
 integration (and the test suite) can continue importing the familiar name.
@@ -33,10 +35,9 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
-from aiocoap import Context, Message, Unreliable
+from aiocoap import Message, Unreliable
 from aiocoap.numbers.codes import GET
 from philips_airctrl import CoAPClient as _UpstreamCoAPClient
-from philips_airctrl.coap.encryption import EncryptionContext
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -45,28 +46,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class PatchedCoAPClient(_UpstreamCoAPClient):
-    """Upstream CoAPClient with two stability fixes from aioairctrl.
+    """Upstream CoAPClient with one stability fix from aioairctrl.
 
     See the module docstring for the rationale. All methods not overridden
     here inherit the upstream behaviour, so future upstream improvements
     flow through automatically.
     """
-
-    async def _init(self) -> None:  # type: ignore[override]
-        """Create the aiocoap context with an explicit transport selection."""
-        self._client_context = await Context.create_client_context(
-            transports=["simple6"],
-        )
-        self._encryption_context = EncryptionContext()
-        try:
-            await self._sync()
-        except BaseException:
-            # Clean up the aiocoap context on any init failure (including
-            # CancelledError, which inherits BaseException) to avoid a
-            # resource leak when the integration setup is aborted.
-            with contextlib.suppress(Exception):
-                await self._client_context.shutdown()
-            raise
 
     async def observe_status(self) -> AsyncIterator[dict[str, Any]]:  # type: ignore[override]
         """Observe status and cancel the CoAP observation on generator exit."""

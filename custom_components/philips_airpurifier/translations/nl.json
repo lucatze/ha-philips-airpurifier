@@ -22,6 +22,30 @@
       "connect": "Kan geen verbinding maken met het apparaat"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Update-gedrag",
+        "description": "Kies hoe je luchtreiniger zijn status doorgeeft aan Home Assistant.\n\n**Push** (standaard)\nHet apparaat verstuurt bij elke wijziging direct een gebeurtenis. Laagste latency, hoogste update-frequentie in HA.\n\n**Push getemperd**\nHet apparaat blijft op de achtergrond gebeurtenissen sturen, maar HA neemt de nieuwste status slechts één keer per interval over. Vermindert HA-state-churn; netwerkverkeer blijft gelijk.\n\n**Poll**\nObserve wordt uitgeschakeld. HA haalt de status in plaats daarvan actief op met een vast interval. Constante, voorspelbare netwerkbelasting. Wijzigingen op het apparaat zelf (bijv. een fysieke knop indrukken) verschijnen met maximaal één interval vertraging.\n\n**Let op:** Commando's van HA naar het apparaat (aan/uit, modus, ventilatorstand) zijn in alle drie modi altijd direct — die lopen via een apart kanaal en worden door deze instelling niet beïnvloed.",
+        "data": {
+          "update_mode": "Modus",
+          "update_interval": "Interval (seconden)"
+        },
+        "data_description": {
+          "update_interval": "Wordt alleen gebruikt in de modi 'Push getemperd' en 'Poll'. Geldig bereik: 1 tot 300 seconden."
+        }
+      }
+    }
+  },
+  "selector": {
+    "update_mode": {
+      "options": {
+        "push": "Push — realtime, elke gebeurtenis",
+        "push_throttled": "Push getemperd — HA-update elke N seconden",
+        "poll": "Poll — apparaat elke N seconden opvragen"
+      }
+    }
+  },
   "entity": {
     "fan": {
       "pap": {

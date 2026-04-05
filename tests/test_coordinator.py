@@ -603,6 +603,149 @@ async def test_do_reconnect_success_updates_data_and_timeout(hass: HomeAssistant
     start_observing.assert_called_once()
 
 
+async def test_emit_observed_status_pushes_immediately_when_throttle_off(
+    hass: HomeAssistant,
+) -> None:
+    """With throttle disabled the coordinator forwards every push to HA."""
+    coordinator = _make_coordinator(hass)
+    assert coordinator._throttle_enabled is False
+
+    with patch.object(coordinator, "async_set_updated_data") as push:
+        coordinator._emit_observed_status({"pwr": "1"})
+        coordinator._emit_observed_status({"pwr": "0"})
+
+    assert push.call_count == 2
+    assert coordinator._latest_status == {"pwr": "0"}
+
+
+async def test_emit_observed_status_caches_only_when_throttle_on(
+    hass: HomeAssistant,
+) -> None:
+    """With throttle enabled the observe loop does not push directly."""
+    coordinator = _make_coordinator(hass)
+    coordinator._throttle_enabled = True
+
+    with patch.object(coordinator, "async_set_updated_data") as push:
+        coordinator._emit_observed_status({"pwr": "1"})
+        coordinator._emit_observed_status({"pwr": "0"})
+
+    push.assert_not_called()
+    assert coordinator._latest_status == {"pwr": "0"}
+
+
+async def test_async_throttle_loop_emits_cached_status(hass: HomeAssistant) -> None:
+    """Throttle loop publishes the cached latest status once per interval."""
+    coordinator = _make_coordinator(hass)
+    coordinator._throttle_interval = 5
+    coordinator._latest_status = {"pwr": "1"}
+
+    with (
+        patch(
+            "custom_components.philips_airpurifier.coordinator.asyncio.sleep",
+            side_effect=[None, asyncio.CancelledError],
+        ),
+        patch.object(coordinator, "async_set_updated_data") as push,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await coordinator._async_throttle_loop()
+
+    push.assert_called_once_with({"pwr": "1"})
+
+
+async def test_async_throttle_loop_skips_emit_when_no_cached_status(
+    hass: HomeAssistant,
+) -> None:
+    """Throttle loop does nothing while no cached status is pending."""
+    coordinator = _make_coordinator(hass)
+    coordinator._throttle_interval = 5
+    coordinator._latest_status = None
+
+    with (
+        patch(
+            "custom_components.philips_airpurifier.coordinator.asyncio.sleep",
+            side_effect=[None, asyncio.CancelledError],
+        ),
+        patch.object(coordinator, "async_set_updated_data") as push,
+        pytest.raises(asyncio.CancelledError),
+    ):
+        await coordinator._async_throttle_loop()
+
+    push.assert_not_called()
+
+
+async def test_start_observing_starts_throttle_task_when_enabled(
+    hass: HomeAssistant,
+) -> None:
+    """_start_observing spawns the throttle task only if throttle is enabled."""
+    coordinator = _make_coordinator(hass)
+    coordinator._throttle_enabled = True
+
+    created: list[str] = []
+
+    def _fake_create_task(coro, name=None, **_kwargs):
+        created.append(name or "")
+        coro.close()
+        return MagicMock()
+
+    with patch.object(hass, "async_create_task", side_effect=_fake_create_task):
+        coordinator._start_observing()
+
+    assert any("throttle" in n for n in created)
+
+
+async def test_start_observing_skips_throttle_task_when_disabled(
+    hass: HomeAssistant,
+) -> None:
+    """_start_observing does not spawn the throttle task when throttle is off."""
+    coordinator = _make_coordinator(hass)
+    coordinator._throttle_enabled = False
+
+    created: list[str] = []
+
+    def _fake_create_task(coro, name=None, **_kwargs):
+        created.append(name or "")
+        coro.close()
+        return MagicMock()
+
+    with patch.object(hass, "async_create_task", side_effect=_fake_create_task):
+        coordinator._start_observing()
+
+    assert not any("throttle" in n for n in created)
+    assert coordinator._throttle_task is None
+
+
+async def test_start_observing_cancels_previous_throttle_task(
+    hass: HomeAssistant,
+) -> None:
+    """_start_observing cancels an already-running throttle task before replacing it."""
+    coordinator = _make_coordinator(hass)
+    coordinator._throttle_enabled = True
+    old_throttle = MagicMock()
+    coordinator._throttle_task = old_throttle
+
+    def _fake_create_task(coro, *_args, **_kwargs):
+        coro.close()
+        return MagicMock()
+
+    with patch.object(hass, "async_create_task", side_effect=_fake_create_task):
+        coordinator._start_observing()
+
+    old_throttle.cancel.assert_called_once()
+
+
+async def test_async_shutdown_cancels_throttle_task(hass: HomeAssistant) -> None:
+    """async_shutdown cancels the throttle task if one is running."""
+    coordinator = _make_coordinator(hass)
+    throttle_task = MagicMock()
+    coordinator._throttle_task = throttle_task
+    coordinator.client = AsyncMock()
+
+    await coordinator.async_shutdown()
+
+    throttle_task.cancel.assert_called_once()
+    assert coordinator._throttle_task is None
+
+
 async def test_async_observe_status_iteration_timeout_triggers_reconnect(
     hass: HomeAssistant,
 ) -> None:

@@ -48,6 +48,19 @@ CONF_MODEL = "model"
 CONF_DEVICE_ID = "device_id"
 CONF_STATUS = "status"
 
+# Options: throttle CoAP-push updates to at most one emit per interval.
+# When disabled (default), every push event from the device is forwarded
+# immediately to Home Assistant. When enabled, the observe stream still
+# runs but the coordinator emits the most recent status at a fixed
+# interval, reducing state-churn for users who find the raw push rate
+# too high.
+CONF_THROTTLE_ENABLED = "throttle_enabled"
+CONF_THROTTLE_INTERVAL = "throttle_interval"
+DEFAULT_THROTTLE_ENABLED = False
+DEFAULT_THROTTLE_INTERVAL = 10
+MIN_THROTTLE_INTERVAL = 1
+MAX_THROTTLE_INTERVAL = 300
+
 SWITCH_ON = "on"
 TEST_ON = "on"
 SWITCH_OFF = "off"

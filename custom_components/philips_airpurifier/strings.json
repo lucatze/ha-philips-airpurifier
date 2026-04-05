@@ -30,6 +30,18 @@
       "cannot_connect": "Cannot connect to device"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Philips AirPurifier options",
+        "description": "Throttle CoAP push updates: when enabled, device pushes are still received in the background but only forwarded to Home Assistant at most once per interval. Disable for immediate push-through (default).",
+        "data": {
+          "throttle_enabled": "Enable push throttle",
+          "throttle_interval": "Interval in seconds"
+        }
+      }
+    }
+  },
   "entity": {
     "fan": {
       "pap": {

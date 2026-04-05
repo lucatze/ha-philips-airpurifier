@@ -105,3 +105,24 @@ async def test_async_unload_entry_false_skips_shutdown(
 
     assert result is False
     coordinator.async_shutdown.assert_not_called()
+
+
+async def test_options_update_triggers_reload(
+    hass: HomeAssistant,
+    init_integration: MockConfigEntry,
+) -> None:
+    """Changing entry options should reload the config entry."""
+    with patch(
+        "custom_components.philips_airpurifier.PhilipsAirPurifierCoordinator._start_observing",
+    ):
+        hass.config_entries.async_update_entry(
+            init_integration,
+            options={"throttle_enabled": True, "throttle_interval": 15},
+        )
+        await hass.async_block_till_done()
+
+    # Entry must still be loaded after the reload and the new options applied.
+    assert init_integration.state is ConfigEntryState.LOADED
+    coordinator = init_integration.runtime_data
+    assert coordinator._throttle_enabled is True
+    assert coordinator._throttle_interval == 15

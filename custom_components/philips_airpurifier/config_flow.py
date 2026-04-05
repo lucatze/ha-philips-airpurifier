@@ -1,5 +1,7 @@
 """The Philips AirPurifier component."""
 
+from __future__ import annotations
+
 import ipaddress
 import logging
 import re
@@ -8,13 +10,26 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant import config_entries, exceptions
-from homeassistant.config_entries import ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_NAME
+from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.dhcp import DhcpServiceInfo
 
 from .client import CoAPClient, async_fetch_status
-from .const import CONF_DEVICE_ID, CONF_MODEL, CONF_STATUS, DOMAIN, PhilipsApi
+from .const import (
+    CONF_DEVICE_ID,
+    CONF_MODEL,
+    CONF_STATUS,
+    CONF_THROTTLE_ENABLED,
+    CONF_THROTTLE_INTERVAL,
+    DEFAULT_THROTTLE_ENABLED,
+    DEFAULT_THROTTLE_INTERVAL,
+    DOMAIN,
+    MAX_THROTTLE_INTERVAL,
+    MIN_THROTTLE_INTERVAL,
+    PhilipsApi,
+)
 from .device_models import DEVICE_MODELS
 from .helpers import extract_model, extract_name
 
@@ -36,6 +51,14 @@ class PhilipsAirPurifierConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle config flow for Philips AirPurifier."""
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: ConfigEntry,
+    ) -> PhilipsAirPurifierOptionsFlow:
+        """Return the options flow handler."""
+        return PhilipsAirPurifierOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         """Initialize."""
@@ -319,6 +342,45 @@ class PhilipsAirPurifierConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = self._get_schema({CONF_HOST: entry.data.get(CONF_HOST, "")})
         return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
+
+
+class PhilipsAirPurifierOptionsFlow(OptionsFlow):
+    """Options flow for the Philips AirPurifier integration.
+
+    Currently exposes the optional push-throttle setting: when enabled,
+    CoAP observe pushes are forwarded to Home Assistant at most once per
+    configured interval instead of on every event. Useful for users who
+    find the raw push rate too high.
+    """
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        """Store the config entry for later use."""
+        self._entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Present and persist the options form."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        current = self._entry.options
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_THROTTLE_ENABLED,
+                    default=current.get(CONF_THROTTLE_ENABLED, DEFAULT_THROTTLE_ENABLED),
+                ): bool,
+                vol.Required(
+                    CONF_THROTTLE_INTERVAL,
+                    default=current.get(CONF_THROTTLE_INTERVAL, DEFAULT_THROTTLE_INTERVAL),
+                ): vol.All(
+                    cv.positive_int,
+                    vol.Range(min=MIN_THROTTLE_INTERVAL, max=MAX_THROTTLE_INTERVAL),
+                ),
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)
 
 
 class InvalidHost(exceptions.HomeAssistantError):

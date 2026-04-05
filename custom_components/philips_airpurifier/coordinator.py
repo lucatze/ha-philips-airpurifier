@@ -11,7 +11,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client import CoAPClient, async_create_client
-from .const import DOMAIN
+from .const import DEFAULT_THROTTLE_ENABLED, DEFAULT_THROTTLE_INTERVAL, DOMAIN
 from .device_models import DEVICE_MODELS
 from .model import ApiGeneration, DeviceInformation, DeviceModelConfig
 
@@ -42,6 +42,9 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         client: CoAPClient,
         host: str,
         device_info: DeviceInformation,
+        *,
+        throttle_enabled: bool = DEFAULT_THROTTLE_ENABLED,
+        throttle_interval: int = DEFAULT_THROTTLE_INTERVAL,
     ) -> None:
         """Initialize the coordinator."""
         super().__init__(
@@ -59,6 +62,15 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._watchdog_task: asyncio.Task[None] | None = None
         self._last_update: float = 0.0
         self._device_available = True
+
+        # Optional throttling of observe-push updates. When enabled, the
+        # observe loop caches the most recent status and a separate task
+        # emits it to Home Assistant at most once per interval. When
+        # disabled, every push is forwarded immediately (default).
+        self._throttle_enabled = throttle_enabled
+        self._throttle_interval = throttle_interval
+        self._latest_status: dict[str, Any] | None = None
+        self._throttle_task: asyncio.Task[None] | None = None
 
     def _mark_unavailable(self, reason: str) -> None:
         """Mark the device unavailable and log transition once."""
@@ -106,6 +118,24 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Set multiple control values on the device."""
         await self.client.set_control_values(data=values)
 
+    def _emit_observed_status(self, status: dict[str, Any]) -> None:
+        """Forward an observed status to HA, honouring the throttle setting.
+
+        When throttling is disabled the status is pushed to HA immediately
+        (original behaviour). When enabled, the status is cached and the
+        running throttle task will publish it at most once per interval.
+        """
+        self._latest_status = status
+        if not self._throttle_enabled:
+            self.async_set_updated_data(status)
+
+    async def _async_throttle_loop(self) -> None:
+        """Publish the latest cached status on a fixed interval."""
+        while True:
+            await asyncio.sleep(self._throttle_interval)
+            if self._latest_status is not None:
+                self.async_set_updated_data(self._latest_status)
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from the device (used for initial refresh and fallback)."""
         try:
@@ -142,6 +172,16 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             f"philips_airpurifier_watchdog_{self.host}",
         )
 
+        if self._throttle_task is not None:
+            self._throttle_task.cancel()
+            self._throttle_task = None
+
+        if self._throttle_enabled:
+            self._throttle_task = self.hass.async_create_task(
+                self._async_throttle_loop(),
+                f"philips_airpurifier_throttle_{self.host}",
+            )
+
     async def _async_observe_status(self) -> None:
         """Observe device status via CoAP push updates with per-iteration timeout."""
         stream = self.client.observe_status()
@@ -169,7 +209,7 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     break
                 self._last_update = asyncio.get_event_loop().time()
                 self._mark_available()
-                self.async_set_updated_data(status)
+                self._emit_observed_status(status)
         except asyncio.CancelledError:
             raise
         except Exception as err:
@@ -293,6 +333,10 @@ class PhilipsAirPurifierCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
             self._reconnect_task = None
+
+        if self._throttle_task is not None:
+            self._throttle_task.cancel()
+            self._throttle_task = None
 
         if self.client is not None:
             with contextlib.suppress(Exception):

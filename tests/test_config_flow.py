@@ -765,3 +765,58 @@ async def test_user_flow_model_family_supported_branch(hass: HomeAssistant) -> N
         )
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_options_flow_shows_form_and_saves(hass: HomeAssistant) -> None:
+    """Options flow renders the form and persists the user's selection."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Throttle Test",
+        data={
+            CONF_HOST: TEST_HOST,
+            CONF_MODEL: "AC0650",
+            CONF_NAME: "Throttle Test",
+            CONF_DEVICE_ID: TEST_DEVICE_ID,
+            CONF_STATUS: MOCK_STATUS_GEN1,
+        },
+        unique_id=TEST_DEVICE_ID,
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={"throttle_enabled": True, "throttle_interval": 20},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert entry.options == {"throttle_enabled": True, "throttle_interval": 20}
+
+
+async def test_options_flow_defaults_from_existing_options(hass: HomeAssistant) -> None:
+    """Options flow pre-fills defaults from existing entry options."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="Throttle Test",
+        data={
+            CONF_HOST: TEST_HOST,
+            CONF_MODEL: "AC0650",
+            CONF_NAME: "Throttle Test",
+            CONF_DEVICE_ID: TEST_DEVICE_ID,
+            CONF_STATUS: MOCK_STATUS_GEN1,
+        },
+        options={"throttle_enabled": True, "throttle_interval": 42},
+        unique_id=TEST_DEVICE_ID,
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    # Submit unchanged — the persisted options should match the pre-fill.
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        user_input={"throttle_enabled": True, "throttle_interval": 42},
+    )
+    assert entry.options == {"throttle_enabled": True, "throttle_interval": 42}

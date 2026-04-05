@@ -22,6 +22,18 @@
       "connect": "Verbindung zum Gerät nicht möglich"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Philips AirPurifier Optionen",
+        "description": "Push-Updates drosseln: wenn aktiviert, werden CoAP-Pushes vom Gerät weiterhin im Hintergrund empfangen, aber nur höchstens einmal pro Intervall an Home Assistant weitergegeben. Deaktiviert = sofortige Weitergabe (Standard).",
+        "data": {
+          "throttle_enabled": "Push-Drosselung aktivieren",
+          "throttle_interval": "Intervall in Sekunden"
+        }
+      }
+    }
+  },
   "entity": {
     "fan": {
       "pap": {

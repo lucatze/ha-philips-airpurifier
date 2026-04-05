@@ -16,6 +16,10 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_MODEL,
     CONF_STATUS,
+    CONF_THROTTLE_ENABLED,
+    CONF_THROTTLE_INTERVAL,
+    DEFAULT_THROTTLE_ENABLED,
+    DEFAULT_THROTTLE_INTERVAL,
     DOMAIN,
 )
 from .coordinator import PhilipsAirPurifierCoordinator
@@ -78,7 +82,19 @@ async def async_setup_entry(
         device_id=device_id,
     )
 
-    coordinator = PhilipsAirPurifierCoordinator(hass, client, host, device_information)
+    throttle_enabled = entry.options.get(CONF_THROTTLE_ENABLED, DEFAULT_THROTTLE_ENABLED)
+    throttle_interval = entry.options.get(CONF_THROTTLE_INTERVAL, DEFAULT_THROTTLE_INTERVAL)
+
+    coordinator = PhilipsAirPurifierCoordinator(
+        hass,
+        client,
+        host,
+        device_information,
+        throttle_enabled=throttle_enabled,
+        throttle_interval=throttle_interval,
+    )
+
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
     # Perform initial data refresh, then start CoAP observation
     await coordinator.async_first_refresh_and_observe()
@@ -102,6 +118,14 @@ async def async_setup_entry(
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
+
+
+async def _async_options_updated(
+    hass: HomeAssistant,
+    entry: PhilipsAirPurifierConfigEntry,
+) -> None:
+    """Reload the config entry when options (e.g. throttle) change."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(

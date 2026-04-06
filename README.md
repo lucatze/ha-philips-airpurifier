@@ -8,7 +8,7 @@
 
 The upstream integration uses a persistent CoAP observe stream to receive push updates from the device. When the connection drops and the integration reconnects, the device-side observation registration from the old connection is never cancelled. Over time this leads to orphaned registrations on the device, which may cause it to silently refuse new observers — manifesting as the "connection works initially but becomes unresponsive over time" symptom documented in the upstream README.
 
-This fork patches `observe_status()` to cancel the CoAP observation in a `finally` block when the caller stops iterating, matching the behaviour of the older, battle-tested [aioairctrl](https://pypi.org/project/aioairctrl/) library that upstream was forked from.
+This fork patches `observe_status()` to cancel the CoAP observation in a `finally` block when the caller stops iterating, matching the behaviour of the [aioairctrl](https://pypi.org/project/aioairctrl/) library that upstream was originally based on.
 
 ### Stability: Hardened coordinator reconnect
 

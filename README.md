@@ -1,5 +1,48 @@
 # Philips Air Purifier Home Assistant Integration
 
+> **This is a fork of [ruaan-deysel/ha-philips-airpurifier](https://github.com/ruaan-deysel/ha-philips-airpurifier)** with stability improvements and additional update modes. All changes are backward-compatible with the original integration and work with all 62+ supported Philips models.
+
+## Fork Changes
+
+### Stability: CoAP observation cleanup (fixes "hangs after a while")
+
+The upstream integration uses a persistent CoAP observe stream to receive push updates from the device. When the connection drops and the integration reconnects, the device-side observation registration from the old connection is never cancelled. Over time this leads to orphaned registrations on the device, which may cause it to silently refuse new observers — manifesting as the "connection works initially but becomes unresponsive over time" symptom documented in the upstream README.
+
+This fork patches `observe_status()` to cancel the CoAP observation in a `finally` block when the caller stops iterating, matching the behaviour of the older, battle-tested [aioairctrl](https://pypi.org/project/aioairctrl/) library that upstream was forked from.
+
+### Stability: Hardened coordinator reconnect
+
+- **Per-iteration timeout on observe loop** (90s): stalled push streams are detected in ~90 seconds instead of silently waiting forever
+- **Exponential backoff on reconnect** (1s, 2s, 4s, ... capped at 60s): prevents reconnect storms that hammer the device
+- **Watchdog checks every 10 seconds** instead of every 180 seconds
+- **15-second timeout on all `get_status()` calls** (initial refresh, reconnect, update): prevents minute-long hangs on unresponsive devices
+- **WARNING-level logging** for observe-loop errors and reconnect attempts (previously silently swallowed)
+- **State reset** (`_last_update = 0`) at the start of each reconnect to prevent stale timestamps from fooling the watchdog
+
+### Feature: Configurable update mode
+
+Three update modes selectable via **Settings > Philips AirPurifier > Configure**:
+
+| Mode | Observe stream | Network traffic | HA updates | Device button visibility |
+|---|---|---|---|---|
+| **Push** (default) | running | bursty | every event | instant |
+| **Push throttled** | running | unchanged | every N seconds | next emit tick |
+| **Poll** | disabled | constant, predictable | every N seconds | up to N seconds delay |
+
+- **Push**: original behaviour, every CoAP event forwarded to HA immediately
+- **Push throttled**: observe stream runs in background, HA receives the latest cached state at most once per interval. Reduces HA state-churn without touching network traffic
+- **Poll**: observe stream disabled, coordinator fetches status via `get_status()` every N seconds. Reduces network traffic to a predictable fixed rate. After 3 consecutive failures the CoAPClient is torn down and rebuilt automatically
+
+The interval is configurable from 1 to 300 seconds (default: 10).
+
+**Important:** Commands from HA to the device (power, mode, fan speed) are always instant in all three modes — they use `set_control_values()`, a separate CoAP POST that is independent of the update mechanism.
+
+### Translations
+
+Options dialog translated in English, German, and Dutch. Bulgarian, Romanian, and Slovak fall back to English (contributions welcome).
+
+---
+
 [![HACS Default][hacs_shield]][hacs]
 [![GitHub Latest Release][releases_shield]][latest_release]
 [![Home Assistant][ha_shield]][ha_link]
@@ -10,18 +53,18 @@
 
 [hacs_shield]: https://img.shields.io/badge/HACS-Default-green?style=flat-square
 [hacs]: https://hacs.xyz/docs/default_repositories
-[releases_shield]: https://img.shields.io/github/release/ruaan-deysel/ha-philips-airpurifier?style=flat-square&color=blue
-[latest_release]: https://github.com/ruaan-deysel/ha-philips-airpurifier/releases/latest
+[releases_shield]: https://img.shields.io/github/release/lucatze/ha-philips-airpurifier?style=flat-square&color=blue
+[latest_release]: https://github.com/lucatze/ha-philips-airpurifier/releases/latest
 [ha_shield]: https://img.shields.io/badge/Home%20Assistant-2025.1%2B-blue?style=flat-square
 [ha_link]: https://www.home-assistant.io/
 [docs_shield]: https://deepwiki.com/badge.svg
-[docs_link]: https://deepwiki.com/ruaan-deysel/ha-philips-airpurifier
-[license_shield]: https://img.shields.io/github/license/ruaan-deysel/ha-philips-airpurifier?style=flat-square&color=orange
-[license_link]: https://github.com/ruaan-deysel/ha-philips-airpurifier/blob/main/custom_components/philips_airpurifier/LICENSE.txt
+[docs_link]: https://deepwiki.com/lucatze/ha-philips-airpurifier
+[license_shield]: https://img.shields.io/github/license/lucatze/ha-philips-airpurifier?style=flat-square&color=orange
+[license_link]: https://github.com/lucatze/ha-philips-airpurifier/blob/main/custom_components/philips_airpurifier/LICENSE.txt
 [community_forum_shield]: https://img.shields.io/badge/Community-Forum-blue?style=flat-square
 [community_forum]: https://community.home-assistant.io/t/philips-air-purifier/53030
-[issues_shield]: https://img.shields.io/github/issues/ruaan-deysel/ha-philips-airpurifier?style=flat-square&color=red
-[issues_link]: https://github.com/ruaan-deysel/ha-philips-airpurifier/issues
+[issues_shield]: https://img.shields.io/github/issues/lucatze/ha-philips-airpurifier?style=flat-square&color=red
+[issues_link]: https://github.com/lucatze/ha-philips-airpurifier/issues
 
 A comprehensive **Local Push** integration for Philips air purifiers and humidifiers in Home Assistant. This integration provides complete control over your Philips air quality devices using the encrypted CoAP protocol for local communication.
 

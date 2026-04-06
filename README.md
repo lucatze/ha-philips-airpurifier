@@ -43,7 +43,7 @@ Options dialog translated in English, German, and Dutch. Bulgarian, Romanian, an
 
 ### How this fork was made
 
-This fork was developed with the help of AI-assisted coding.
+This fork was developed with the help of AI-assisted coding and validated against a Philips AC2889.
 
 ---
 

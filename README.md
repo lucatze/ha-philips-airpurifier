@@ -43,7 +43,7 @@ Options dialog translated in English, German, and Dutch. Bulgarian, Romanian, an
 
 ### How this fork was made
 
-This fork was developed using AI-assisted coding (vibe coding). The upstream codebase was analysed, the root causes of the stability issues were identified, and all changes — code, tests, and translations — were produced in an interactive session with an AI coding assistant. All modifications were reviewed, tested (346 tests, 100% coverage), and validated against a real Philips AC2889 device before publishing.
+This fork was developed with the help of AI-assisted coding.
 
 ---
 
